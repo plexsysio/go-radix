@@ -2,7 +2,10 @@ package radix
 
 import (
 	crand "crypto/rand"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"os"
 	"reflect"
 	"sort"
 	"testing"
@@ -339,6 +342,77 @@ func TestWalkPath(t *testing.T) {
 		sort.Strings(test.out)
 		if !reflect.DeepEqual(out, test.out) {
 			t.Fatalf("mis-match: %v %v", out, test.out)
+		}
+	}
+}
+
+type mapValue map[string]interface{}
+
+func (m mapValue) Marshal() ([]byte, error) {
+	return json.Marshal(m)
+}
+
+func (m mapValue) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, &m)
+}
+
+func TestLoadStore(t *testing.T) {
+	r := New()
+
+	kv := map[string]mapValue{
+		"foo": {
+			"filename": "foo",
+		},
+		"foo/bar": {
+			"filename": "bar",
+			"size":     "100",
+		},
+		"foo/bar/baz": {
+			"filename": "baz",
+			"type":     "image",
+		},
+		"foo/baz/bar": {
+			"filename": "bar",
+			"type":     "video",
+		},
+	}
+	for k, v := range kv {
+		r.Insert(k, v)
+	}
+
+	tmpFile, err := ioutil.TempFile("", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer os.Remove(tmpFile.Name())
+
+	err = r.Save(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tmpFile.Close()
+
+	f, err := os.Open(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loadedTree, err := Load(f, func(_ string) Exportable {
+		return mapValue{}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for k, v := range kv {
+		val, found := loadedTree.Get(k)
+		if !found {
+			t.Fatal("did not find key in loaded tree key:" + k)
+		}
+		if !reflect.DeepEqual(v, val) {
+			t.Fatal(fmt.Sprintf("values dont match on loading expected %v found %v", v, val))
 		}
 	}
 }

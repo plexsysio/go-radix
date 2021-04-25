@@ -1,6 +1,10 @@
 package radix
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -537,4 +541,95 @@ func (t *Tree) ToMap() map[string]interface{} {
 		return false
 	})
 	return out
+}
+
+// Exportable interface can be implemented on the client side to use preferred
+// encoding
+type Exportable interface {
+	Marshal() ([]byte, error)
+	Unmarshal([]byte) error
+}
+
+// ValueFactory is a factory function which constructs the object which is to be
+// used to understand the value stored. The key will be passed to this routine, so
+// we should be able to construct different objects based on different keys
+type ValueFactory func(key string) Exportable
+
+// Save writes the tree to w
+func (t *Tree) Save(w io.Writer) (retErr error) {
+	entryBuf := new(bytes.Buffer)
+	t.Walk(func(k string, v interface{}) bool {
+		e, ok := v.(Exportable)
+		if !ok {
+			retErr = fmt.Errorf("value for key %s is not exportable", k)
+			return true
+		}
+		buf, err := e.Marshal()
+		if err != nil {
+			retErr = fmt.Errorf("failed serializing key %s", k)
+			return true
+		}
+		keySize := make([]byte, 2)
+		binary.LittleEndian.PutUint16(keySize, uint16(len(k)))
+		entryBuf.Write(keySize)
+		entryBuf.Write([]byte(k))
+
+		valueSize := make([]byte, 2)
+		binary.LittleEndian.PutUint16(valueSize, uint16(len(buf)))
+		entryBuf.Write(valueSize)
+		entryBuf.Write(buf)
+
+		entryBuf.WriteTo(w)
+		entryBuf.Reset()
+
+		return false
+	})
+	return
+}
+
+// Load reads the tree bytes from the reader and uses the ValueFactory to reconstruct
+// the tree
+func Load(r io.Reader, factory ValueFactory) (*Tree, error) {
+	t := New()
+	for {
+		keySize := make([]byte, 2)
+		_, err := r.Read(keySize)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		if err == io.EOF {
+			break
+		}
+
+		ksz := binary.LittleEndian.Uint16(keySize)
+		key := make([]byte, ksz)
+		_, err = r.Read(key)
+		if err != nil {
+			return nil, err
+		}
+
+		valueSize := make([]byte, 2)
+		_, err = r.Read(valueSize)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		vsz := binary.LittleEndian.Uint16(valueSize)
+		value := make([]byte, vsz)
+		_, err = r.Read(value)
+		if err != nil {
+			return nil, err
+		}
+
+		v := factory(string(key))
+		err = v.Unmarshal(value)
+		if err != nil {
+			return nil, err
+		}
+
+		t.Insert(string(key), v)
+
+	}
+	return t, nil
 }
