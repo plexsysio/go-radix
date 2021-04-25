@@ -579,7 +579,15 @@ func (t *Tree) Save(w io.Writer) (retErr error) {
 		entryBuf.Write(valueSize)
 		entryBuf.Write(buf)
 
-		entryBuf.WriteTo(w)
+		n, err := entryBuf.WriteTo(w)
+		if err != nil {
+			retErr = fmt.Errorf("failed writing key %s to storage", k)
+			return true
+		}
+		if int(n) != 4+len(k)+len(buf) {
+			retErr = fmt.Errorf("incorrect no of bytes written")
+			return true
+		}
 		entryBuf.Reset()
 
 		return false
